@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import Papa from "papaparse";
+import type { Session } from "@supabase/supabase-js";
+import { supabase } from "../lib/supabaseClient";
 
 interface Planet {
   name: string;
@@ -16,6 +18,7 @@ interface Stat {
 
 type SortField = "ESI" | "Radius" | "Temperature" | "AvgRating";
 
+
 export default function Home() {
   const [planets, setPlanets] = useState<Planet[]>([]);
   const [ratings, setRatings] = useState<{ [key: string]: number }>({});
@@ -28,7 +31,28 @@ export default function Home() {
   const [maxRadius, setMaxRadius] = useState(10);
   const [minESI, setMinESI] = useState(0);
   const [displayCount, setDisplayCount] = useState(10);
+  const [session, setSession] = useState<Session | null>(null);
 
+  useEffect(() => {
+    // 1️⃣ fetch the initial session
+    supabase.auth.getSession().then((res) => {
+      // res.data is never null here, but TS errs, so guard:
+      if (res.data && res.data.session) {
+        setSession(res.data.session);
+      }
+    });
+
+    // 2️⃣ subscribe to sign-in/sign-out
+    const { data: listener } = supabase.auth.onAuthStateChange(
+      (_event, newSession) => {
+        setSession(newSession);
+      }
+    );
+
+    return () => {
+      listener.subscription.unsubscribe();
+    };
+  }, []);
   useEffect(() => {
     fetch("/api/exoplanets")
       .then((res) => res.text())
@@ -110,25 +134,55 @@ useEffect(() => {
     setRatings({ ...ratings, [name]: value });
   }
 
-  async function submitRatings() {
-    await Promise.all(
-      Object.entries(ratings).map(([planet_name, rating]) =>
-        fetch("/api/ratings", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ planet_name, rating }),
-        })
-      )
-    );
-    alert("Ratings saved! 🎉");
-    setStats({});
+ // inside your Home() component
+
+async function submitRatings() {
+  // 1️⃣ Guard: if no user is signed in, do nothing (or show a message)
+  if (!session) {
+    alert("Please Sign In before submitting your ratings!");
+    return;
   }
+
+  // 2️⃣ Otherwise proceed as before
+  await Promise.all(
+    Object.entries(ratings).map(([planet_name, rating]) =>
+      fetch("/api/ratings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ planet_name, rating }),
+      })
+    )
+  );
+
+  alert("Thanks for rating! 🚀");
+  setStats({}); // refresh averages
+}
+
 
   return (
     <div className="p-8">
       <h1 style={{ fontSize: "2rem", marginBottom: "1rem" }}>
-        Rate Real Exoplanets 🌍✨
+        Rate Real Exoplanets! 🌍
       </h1>
+      <div className="mb-6">
+        {!session ? (
+          <button
+            onClick={() =>
+              supabase.auth.signInWithOAuth({ provider: "github" })
+            }
+            className="px-4 py-2 bg-gray-800 text-white rounded hover:bg-gray-700"
+          >
+            Sign in with GitHub
+          </button>
+        ) : (
+          <button
+            onClick={() => supabase.auth.signOut()}
+            className="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-500"
+          >
+            Sign out ({session.user.email})
+          </button>
+        )}
+      </div>
 
       {/* Search, Filter & Sort Controls */}
       <div style={{ marginBottom: "1rem", display: "flex", flexWrap: "wrap", gap: "1rem" }}>
@@ -205,7 +259,7 @@ useEffect(() => {
           />
         </label>
       </div>
-
+      
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
         {displayList.map((planet) => (
           <div key={planet.name} className="border p-4 rounded-xl shadow">
@@ -239,13 +293,10 @@ useEffect(() => {
     </div>
     <button
       onClick={submitRatings}
-      className="
-        px-6 py-2 
-        bg-blue-500 hover:bg-blue-600 
-        text-white font-medium 
-        rounded-lg 
-        focus:outline-none focus:ring-2 focus:ring-blue-400
-      "
+      disabled={!session}
+      className={`px-6 py-2 rounded text-white ${
+        session ? "bg-blue-500 hover:bg-blue-600" : "bg-gray-400 cursor-not-allowed"
+      }`}
     >
       Submit Ratings
     </button>
